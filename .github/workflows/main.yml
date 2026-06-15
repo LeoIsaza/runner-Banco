@@ -78,6 +78,5 @@ jobs:
         with:
           name: gatling-results
           path: |
-            project/target/gatling/**
             project/results/**
           if-no-files-found: warn
