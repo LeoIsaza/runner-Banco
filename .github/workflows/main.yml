@@ -1,4 +1,4 @@
-name: Run Gatling Simulation
+name: Performance - ${{ github.event.inputs.simulation_class }}
 
 on:
   workflow_dispatch:
@@ -23,7 +23,6 @@ on:
 jobs:
   run-gatling:
     runs-on: ubuntu-latest
-    name: Performance - ${{ github.event.inputs.simulation_class }}
 
     steps:
 
