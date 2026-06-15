@@ -18,7 +18,7 @@ on:
       enviroment:
         description: 'Ambiente para ejecutar prueba de performance'
         required: true
-        default: 'simulations.customers.CustomersSimulation'
+        default: 'perf'
 
 jobs:
   run-gatling:
