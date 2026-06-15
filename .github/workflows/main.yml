@@ -7,14 +7,18 @@ on:
         description: 'Git repository URL'
         required: true
         default: 'https://github.com/user/repo.git'
-      simulation_class:
-        description: 'Gatling Simulation Class (FQCN)'
-        required: true
-        default: 'simulations.customers.CustomersSimulation'
       branch:
         description: 'Branch to clone'
         required: false
         default: 'main'
+      simulation_class:
+        description: 'Gatling Simulation Class'
+        required: true
+        default: 'simulations.customers.CustomersSimulation'
+      enviroment:
+        description: 'Ambiente para ejecutar prueba de performance'
+        required: true
+        default: 'simulations.customers.CustomersSimulation'
 
 jobs:
   run-gatling:
@@ -58,4 +62,21 @@ jobs:
           mvn clean gatling:test \
           -Dgatling.simulationClass=${{ github.event.inputs.simulation_class }}
 
-  
+      
+       # ✅ Verificar carpeta results
+      - name: List Gatling results
+        working-directory: ./project
+        run: |
+          echo "Listing results folder..."
+          ls -R target/gatling || true
+          ls -R results || true
+
+      # ✅ Subir resultados como artifact
+      - name: Upload Gatling Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatling-results
+          path: |
+            project/target/gatling/**
+            project/results/**
+          if-no-files-found: warn
