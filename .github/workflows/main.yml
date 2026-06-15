@@ -7,10 +7,6 @@ on:
         description: 'Git repository URL'
         required: true
         default: 'https://github.com/user/repo.git'
-      feature_path:
-        description: 'Karate feature (optional)'
-        required: false
-        default: ''
       simulation_class:
         description: 'Gatling Simulation Class (FQCN)'
         required: true
@@ -62,11 +58,4 @@ jobs:
           mvn clean gatling:test \
           -Dgatling.simulationClass=${{ github.event.inputs.simulation_class }}
 
-      # ✅ (Opcional) Ejecutar con Karate feature/tag
-      - name: Run with Karate Feature (optional)
-        if: ${{ github.event.inputs.feature_path != '' }}
-        working-directory: ./project
-        run: |
-          mvn clean gatling:test \
-          -Dgatling.simulationClass=${{ github.event.inputs.simulation_class }} \
-          -Dkarate.options="--tags @${{ github.event.inputs.feature_path }}"
+  
