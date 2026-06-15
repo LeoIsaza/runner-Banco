@@ -23,6 +23,7 @@ on:
 jobs:
   run-gatling:
     runs-on: ubuntu-latest
+    name: Performance - ${{ github.event.inputs.simulation_class }}
 
     steps:
 
