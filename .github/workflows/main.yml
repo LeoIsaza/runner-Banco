@@ -60,7 +60,7 @@ jobs:
           echo "Running simulation: ${{ github.event.inputs.simulation_class }}"
           
           mvn clean gatling:test \
-          -Dgatling.simulationClass=${{ github.event.inputs.simulation_class }}
+          -Dkarate.options="--debug" -Dgatling.simulationClass=${{ github.event.inputs.simulation_class }}
 
       
        # ✅ Verificar carpeta results
