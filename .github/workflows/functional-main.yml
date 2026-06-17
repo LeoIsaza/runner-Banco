@@ -60,7 +60,7 @@ jobs:
         run: |
           echo "Running tests: ${{ github.event.inputs.functional_tag }}"
           
-          mvn clean test \
+          mvn clean test allure:report \
           "-Dkarate.options=--tags ${{ github.event.inputs.functional_tag }} --debug"  -Ddriver=karate -Dkarate.env=${{ github.event.inputs.enviroment }}
       
   
@@ -70,5 +70,5 @@ jobs:
         with:
           name: functional-report
           path: |
-            project/allure-report/**
+            project/target/site/allure-maven-plugin/**
           if-no-files-found: warn
