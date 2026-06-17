@@ -61,7 +61,7 @@ jobs:
           echo "Running tests: ${{ github.event.inputs.functional_tag }}"
           
           mvn clean test \
-          -Dkarate.options=--tags ${{ github.event.inputs.functional_tag }} -Dkarate.options="--debug"  -Ddriver=karate -Dkarate.env=${{ github.event.inputs.enviroment }}
+          "-Dkarate.options=--tags ${{ github.event.inputs.functional_tag }} --debug"  -Ddriver=karate -Dkarate.env=${{ github.event.inputs.enviroment }}
       
   
       # ✅ Subir resultados como artifact
