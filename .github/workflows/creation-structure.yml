@@ -175,15 +175,15 @@ jobs:
           if-no-files-found: warn
 
       #################################################################
-      # Upload Surefire
+      # Upload Karate
       #################################################################
 
-      - name: Upload Surefire Reports
+      - name: Upload Karate Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: surefire-reports
-          path: project/target/surefire-reports
+          path: project/target/karate-reports
           if-no-files-found: warn
 
       #################################################################
