@@ -42,16 +42,8 @@ jobs:
 
     steps:
 
-      #################################################################
-      # Checkout repo del pipeline
-      #################################################################
-
       - name: Checkout Pipeline Repository
         uses: actions/checkout@v4
-
-      #################################################################
-      # Clonar proyecto objetivo
-      #################################################################
 
       - name: Clone Target Repository
         run: |
@@ -63,19 +55,11 @@ jobs:
           echo "Repositorio clonado"
           ls -la project
 
-      #################################################################
-      # Setup Java
-      #################################################################
-
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      #################################################################
-      # Cache Maven
-      #################################################################
 
       - name: Cache Maven
         uses: actions/cache@v4
@@ -85,19 +69,11 @@ jobs:
           restore-keys: |
             maven-${{ runner.os }}
 
-      #################################################################
-      # Guardar Curl
-      #################################################################
-
       - name: Save Curl Request
         run: |
           cat <<'EOF' > curl_input.txt
           ${{ github.event.inputs.curl_request }}
           EOF
-
-      #################################################################
-      # Compilar Generador
-      #################################################################
 
       - name: Compile Generator
         working-directory: ./project
@@ -107,10 +83,6 @@ jobs:
           javac \
             .github/scripts/GenerateFeature.java \
             -d .github/scripts/out
-
-      #################################################################
-      # Generar Tests Karate
-      #################################################################
 
       - name: Generate Karate Tests
         id: generate
@@ -134,18 +106,10 @@ jobs:
 
           echo "Folder generado: $FOLDER"
 
-      #################################################################
-      # Mostrar Archivos Generados
-      #################################################################
-
       - name: Show Generated Files
         working-directory: ./project
         run: |
           find src/test -type f || true
-
-      #################################################################
-      # Ejecutar Karate
-      #################################################################
 
       - name: Run Karate Tests
         if: ${{ github.event.inputs.run_tests }}
@@ -162,10 +126,6 @@ jobs:
             "-Dkarate.env=${{ github.event.inputs.karate_env }}" \
             --no-transfer-progress
 
-      #################################################################
-      # Upload Allure
-      #################################################################
-
       - name: Upload Allure Results
         if: always()
         uses: actions/upload-artifact@v4
@@ -174,21 +134,13 @@ jobs:
           path: project/target/allure-results
           if-no-files-found: warn
 
-      #################################################################
-      # Upload Karate
-      #################################################################
-
       - name: Upload Karate Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-reports
+          name: karate-reports
           path: project/target/karate-reports
           if-no-files-found: warn
-
-      #################################################################
-      # Crear Rama
-      #################################################################
 
       - name: Create Automation Branch
         if: ${{ github.event.inputs.commit_results }}
@@ -201,10 +153,6 @@ jobs:
           git checkout -b "$BRANCH_NAME"
 
           echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
-
-      #################################################################
-      # Commit
-      #################################################################
 
       - name: Commit Generated Tests
         if: ${{ github.event.inputs.commit_results }}
@@ -223,21 +171,25 @@ jobs:
 
           git commit -m "feat(karate): auto-generated tests"
 
-      #################################################################
-      # Push
-      #################################################################
+      - name: Configure Git Authentication
+        if: ${{ github.event.inputs.commit_results }}
+        working-directory: ./project
+        run: |
+
+          AUTH_URL=$(echo "${{ github.event.inputs.repo_url }}" \
+            | sed "s#https://#https://x-access-token:${{ secrets.PAT_TOKEN }}@#")
+
+          git remote set-url origin "$AUTH_URL"
+
+          git remote -v
 
       - name: Push Branch
         if: ${{ github.event.inputs.commit_results }}
         working-directory: ./project
         run: |
-
-          git push origin \
+          git push \
+            --set-upstream origin \
             "${{ steps.branch.outputs.branch_name }}"
-
-      #################################################################
-      # Resumen
-      #################################################################
 
       - name: Summary
         run: |
