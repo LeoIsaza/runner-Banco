@@ -43,27 +43,28 @@ jobs:
     steps:
 
       #################################################################
-      # Checkout repositorio del pipeline
+      # Checkout repo del pipeline
       #################################################################
 
-      - name: Checkout pipeline repo
+      - name: Checkout Pipeline Repository
         uses: actions/checkout@v4
 
       #################################################################
-      # Clonar repositorio destino
+      # Clonar proyecto objetivo
       #################################################################
 
-      - name: Clone target repo
+      - name: Clone Target Repository
         run: |
           git clone \
             -b "${{ github.event.inputs.branch }}" \
             "${{ github.event.inputs.repo_url }}" \
             project
 
+          echo "Repositorio clonado"
           ls -la project
 
       #################################################################
-      # Java
+      # Setup Java
       #################################################################
 
       - name: Set up Java
@@ -85,22 +86,21 @@ jobs:
             maven-${{ runner.os }}
 
       #################################################################
-      # Guardar curl
+      # Guardar Curl
       #################################################################
 
-      - name: Save curl request
+      - name: Save Curl Request
         run: |
           cat <<'EOF' > curl_input.txt
           ${{ github.event.inputs.curl_request }}
           EOF
 
-          cat curl_input.txt
-
       #################################################################
-      # Compilar generador
+      # Compilar Generador
       #################################################################
 
-      - name: Compile generator
+      - name: Compile Generator
+        working-directory: ./project
         run: |
           mkdir -p .github/scripts/out
 
@@ -109,16 +109,16 @@ jobs:
             -d .github/scripts/out
 
       #################################################################
-      # Generar features
+      # Generar Tests Karate
       #################################################################
 
-      - name: Generate Karate tests
+      - name: Generate Karate Tests
         id: generate
         working-directory: ./project
         run: |
 
           OUTPUT=$(java \
-            -cp ../.github/scripts/out \
+            -cp .github/scripts/out \
             GenerateFeature \
             --curl-file ../curl_input.txt)
 
@@ -130,32 +130,32 @@ jobs:
             FOLDER="endpoint"
           fi
 
-          echo "folder_name=$FOLDER" >> $GITHUB_OUTPUT
+          echo "folder_name=$FOLDER" >> "$GITHUB_OUTPUT"
 
-          echo "Folder: $FOLDER"
+          echo "Folder generado: $FOLDER"
 
       #################################################################
-      # Mostrar archivos
+      # Mostrar Archivos Generados
       #################################################################
 
-      - name: Show generated files
+      - name: Show Generated Files
         working-directory: ./project
         run: |
-          find src/test -type f
+          find src/test -type f || true
 
       #################################################################
-      # Ejecutar pruebas
+      # Ejecutar Karate
       #################################################################
 
-      - name: Run Karate tests
-        if: ${{ github.event.inputs.run_tests == true }}
+      - name: Run Karate Tests
+        if: ${{ github.event.inputs.run_tests }}
         working-directory: ./project
         continue-on-error: true
         run: |
 
           TAG="@${{ steps.generate.outputs.folder_name }}Services"
 
-          echo "Running tag: $TAG"
+          echo "Ejecutando tag $TAG"
 
           mvn clean test \
             "-Dkarate.options=--tags $TAG" \
@@ -163,7 +163,7 @@ jobs:
             --no-transfer-progress
 
       #################################################################
-      # Subir resultados Allure
+      # Upload Allure
       #################################################################
 
       - name: Upload Allure Results
@@ -175,7 +175,7 @@ jobs:
           if-no-files-found: warn
 
       #################################################################
-      # Subir Surefire
+      # Upload Surefire
       #################################################################
 
       - name: Upload Surefire Reports
@@ -187,27 +187,27 @@ jobs:
           if-no-files-found: warn
 
       #################################################################
-      # Crear rama automática
+      # Crear Rama
       #################################################################
 
-      - name: Create branch
-        if: ${{ github.event.inputs.commit_results == true }}
+      - name: Create Automation Branch
+        if: ${{ github.event.inputs.commit_results }}
         id: branch
         working-directory: ./project
         run: |
 
-          BRANCH=auto/karate-${{ github.run_number }}
+          BRANCH_NAME="auto/karate-${{ github.run_number }}"
 
-          git checkout -b "$BRANCH"
+          git checkout -b "$BRANCH_NAME"
 
-          echo "branch_name=$BRANCH" >> $GITHUB_OUTPUT
+          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
 
       #################################################################
-      # Commit y Push
+      # Commit
       #################################################################
 
-      - name: Commit generated tests
-        if: ${{ github.event.inputs.commit_results == true }}
+      - name: Commit Generated Tests
+        if: ${{ github.event.inputs.commit_results }}
         working-directory: ./project
         run: |
 
@@ -217,11 +217,20 @@ jobs:
           git add .
 
           if git diff --cached --quiet; then
-            echo "No changes detected"
+            echo "No hay cambios para commitear"
             exit 0
           fi
 
           git commit -m "feat(karate): auto-generated tests"
+
+      #################################################################
+      # Push
+      #################################################################
+
+      - name: Push Branch
+        if: ${{ github.event.inputs.commit_results }}
+        working-directory: ./project
+        run: |
 
           git push origin \
             "${{ steps.branch.outputs.branch_name }}"
@@ -232,7 +241,9 @@ jobs:
 
       - name: Summary
         run: |
-          echo "Repository : ${{ github.event.inputs.repo_url }}"
-          echo "Source branch : ${{ github.event.inputs.branch }}"
-          echo "Generated branch : auto/karate-${{ github.run_number }}"
-          echo "Environment : ${{ github.event.inputs.karate_env }}"
+          echo "========================================"
+          echo "Repositorio: ${{ github.event.inputs.repo_url }}"
+          echo "Branch origen: ${{ github.event.inputs.branch }}"
+          echo "Branch creada: auto/karate-${{ github.run_number }}"
+          echo "Ambiente: ${{ github.event.inputs.karate_env }}"
+          echo "========================================"
