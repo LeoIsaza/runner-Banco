@@ -5,22 +5,22 @@ run-name: Karate Generator - ${{ github.event.inputs.branch }}
 on:
   workflow_dispatch:
     inputs:
-      repo_name:
-        description: 'Repositorio destino (org/repo)'
+      repo_url:
+        description: 'Git repository URL'
         required: true
-        default: 'mi-org/mi-repo'
+        default: 'https://github.com/user/repo.git'
 
       branch:
-        description: 'Branch origen'
+        description: 'Branch to clone'
         required: true
         default: 'main'
 
       curl_request:
-        description: 'Curl o request Postman'
+        description: 'Curl o request de Postman'
         required: true
 
       karate_env:
-        description: 'Ambiente'
+        description: 'Ambiente de ejecución'
         required: true
         default: 'qa'
 
@@ -31,7 +31,7 @@ on:
         type: boolean
 
       commit_results:
-        description: 'Commit y Push'
+        description: 'Commit y push'
         required: true
         default: true
         type: boolean
@@ -42,63 +42,62 @@ jobs:
 
     steps:
 
-      ###########################################################
-      # Checkout repo pipeline
-      ###########################################################
+      #################################################################
+      # Checkout repo del pipeline
+      #################################################################
 
       - name: Checkout Pipeline Repository
         uses: actions/checkout@v4
-        with:
-          path: pipeline
 
-      ###########################################################
-      # Checkout repositorio destino
-      ###########################################################
+      #################################################################
+      # Clonar proyecto objetivo
+      #################################################################
 
-      - name: Checkout Target Repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.inputs.repo_name }}
-          ref: ${{ github.event.inputs.branch }}
-          token: ${{ secrets.PAT_TOKEN }}
-          fetch-depth: 0
-          path: project
+      - name: Clone Target Repository
+        run: |
+          git clone \
+            -b "${{ github.event.inputs.branch }}" \
+            "${{ github.event.inputs.repo_url }}" \
+            project
 
-      ###########################################################
-      # JAVA
-      ###########################################################
+          echo "Repositorio clonado"
+          ls -la project
+
+      #################################################################
+      # Setup Java
+      #################################################################
 
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-      ###########################################################
-      # CACHE MAVEN
-      ###########################################################
+      #################################################################
+      # Cache Maven
+      #################################################################
 
       - name: Cache Maven
         uses: actions/cache@v4
         with:
           path: ~/.m2
-          key: maven-${{ runner.os }}-${{ hashFiles('project/pom.xml') }}
+          key: maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             maven-${{ runner.os }}
 
-      ###########################################################
-      # GUARDAR CURL
-      ###########################################################
+      #################################################################
+      # Guardar Curl
+      #################################################################
 
-      - name: Save Curl
+      - name: Save Curl Request
         run: |
           cat <<'EOF' > curl_input.txt
           ${{ github.event.inputs.curl_request }}
           EOF
 
-      ###########################################################
-      # COMPILAR GENERADOR
-      ###########################################################
+      #################################################################
+      # Compilar Generador
+      #################################################################
 
       - name: Compile Generator
         working-directory: ./project
@@ -109,9 +108,9 @@ jobs:
             .github/scripts/GenerateFeature.java \
             -d .github/scripts/out
 
-      ###########################################################
-      # GENERAR TESTS
-      ###########################################################
+      #################################################################
+      # Generar Tests Karate
+      #################################################################
 
       - name: Generate Karate Tests
         id: generate
@@ -125,9 +124,7 @@ jobs:
 
           echo "$OUTPUT"
 
-          FOLDER=$(echo "$OUTPUT" \
-            | grep -oP "(?<=Estructura generada para ')[^']+" \
-            | head -1)
+          FOLDER=$(echo "$OUTPUT" | grep -oP "(?<=Estructura generada para ')[^']+" | head -1)
 
           if [ -z "$FOLDER" ]; then
             FOLDER="endpoint"
@@ -135,18 +132,20 @@ jobs:
 
           echo "folder_name=$FOLDER" >> "$GITHUB_OUTPUT"
 
-      ###########################################################
-      # VALIDAR ARCHIVOS
-      ###########################################################
+          echo "Folder generado: $FOLDER"
+
+      #################################################################
+      # Mostrar Archivos Generados
+      #################################################################
 
       - name: Show Generated Files
         working-directory: ./project
         run: |
           find src/test -type f || true
 
-      ###########################################################
-      # EJECUTAR PRUEBAS
-      ###########################################################
+      #################################################################
+      # Ejecutar Karate
+      #################################################################
 
       - name: Run Karate Tests
         if: ${{ github.event.inputs.run_tests }}
@@ -156,13 +155,16 @@ jobs:
 
           TAG="@${{ steps.generate.outputs.folder_name }}Services"
 
+          echo "Ejecutando tag $TAG"
+
           mvn clean test \
             "-Dkarate.options=--tags $TAG" \
-            "-Dkarate.env=${{ github.event.inputs.karate_env }}"
+            "-Dkarate.env=${{ github.event.inputs.karate_env }}" \
+            --no-transfer-progress
 
-      ###########################################################
-      # ARTIFACTS
-      ###########################################################
+      #################################################################
+      # Upload Allure
+      #################################################################
 
       - name: Upload Allure Results
         if: always()
@@ -172,6 +174,10 @@ jobs:
           path: project/target/allure-results
           if-no-files-found: warn
 
+      #################################################################
+      # Upload Surefire
+      #################################################################
+
       - name: Upload Surefire Reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -180,11 +186,11 @@ jobs:
           path: project/target/surefire-reports
           if-no-files-found: warn
 
-      ###########################################################
-      # RAMA AUTOMÁTICA
-      ###########################################################
+      #################################################################
+      # Crear Rama
+      #################################################################
 
-      - name: Create Branch
+      - name: Create Automation Branch
         if: ${{ github.event.inputs.commit_results }}
         id: branch
         working-directory: ./project
@@ -196,11 +202,11 @@ jobs:
 
           echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
 
-      ###########################################################
-      # COMMIT
-      ###########################################################
+      #################################################################
+      # Commit
+      #################################################################
 
-      - name: Commit Changes
+      - name: Commit Generated Tests
         if: ${{ github.event.inputs.commit_results }}
         working-directory: ./project
         run: |
@@ -211,30 +217,33 @@ jobs:
           git add .
 
           if git diff --cached --quiet; then
-            echo "No changes"
+            echo "No hay cambios para commitear"
             exit 0
           fi
 
           git commit -m "feat(karate): auto-generated tests"
 
-      ###########################################################
-      # PUSH
-      ###########################################################
+      #################################################################
+      # Push
+      #################################################################
 
       - name: Push Branch
         if: ${{ github.event.inputs.commit_results }}
         working-directory: ./project
         run: |
-          git push \
-            --set-upstream origin \
+
+          git push origin \
             "${{ steps.branch.outputs.branch_name }}"
 
-      ###########################################################
-      # RESUMEN
-      ###########################################################
+      #################################################################
+      # Resumen
+      #################################################################
 
       - name: Summary
         run: |
-          echo "Repositorio : ${{ github.event.inputs.repo_name }}"
-          echo "Branch origen : ${{ github.event.inputs.branch }}"
-          echo "Branch creada : auto/karate-${{ github.run_number }}"
+          echo "========================================"
+          echo "Repositorio: ${{ github.event.inputs.repo_url }}"
+          echo "Branch origen: ${{ github.event.inputs.branch }}"
+          echo "Branch creada: auto/karate-${{ github.run_number }}"
+          echo "Ambiente: ${{ github.event.inputs.karate_env }}"
+          echo "========================================"
