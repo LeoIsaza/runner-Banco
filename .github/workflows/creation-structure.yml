@@ -1,0 +1,238 @@
+name: Karate Feature Generator & Runner
+
+run-name: Karate Generator - ${{ github.event.inputs.branch }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_url:
+        description: 'Git repository URL'
+        required: true
+        default: 'https://github.com/user/repo.git'
+
+      branch:
+        description: 'Branch to clone'
+        required: true
+        default: 'main'
+
+      curl_request:
+        description: 'Curl o request de Postman'
+        required: true
+
+      karate_env:
+        description: 'Ambiente de ejecución'
+        required: true
+        default: 'qa'
+
+      run_tests:
+        description: 'Ejecutar pruebas'
+        required: true
+        default: true
+        type: boolean
+
+      commit_results:
+        description: 'Commit y push'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  generate-and-run:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      #################################################################
+      # Checkout repositorio del pipeline
+      #################################################################
+
+      - name: Checkout pipeline repo
+        uses: actions/checkout@v4
+
+      #################################################################
+      # Clonar repositorio destino
+      #################################################################
+
+      - name: Clone target repo
+        run: |
+          git clone \
+            -b "${{ github.event.inputs.branch }}" \
+            "${{ github.event.inputs.repo_url }}" \
+            project
+
+          ls -la project
+
+      #################################################################
+      # Java
+      #################################################################
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      #################################################################
+      # Cache Maven
+      #################################################################
+
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            maven-${{ runner.os }}
+
+      #################################################################
+      # Guardar curl
+      #################################################################
+
+      - name: Save curl request
+        run: |
+          cat <<'EOF' > curl_input.txt
+          ${{ github.event.inputs.curl_request }}
+          EOF
+
+          cat curl_input.txt
+
+      #################################################################
+      # Compilar generador
+      #################################################################
+
+      - name: Compile generator
+        run: |
+          mkdir -p .github/scripts/out
+
+          javac \
+            .github/scripts/GenerateFeature.java \
+            -d .github/scripts/out
+
+      #################################################################
+      # Generar features
+      #################################################################
+
+      - name: Generate Karate tests
+        id: generate
+        working-directory: ./project
+        run: |
+
+          OUTPUT=$(java \
+            -cp ../.github/scripts/out \
+            GenerateFeature \
+            --curl-file ../curl_input.txt)
+
+          echo "$OUTPUT"
+
+          FOLDER=$(echo "$OUTPUT" | grep -oP "(?<=Estructura generada para ')[^']+" | head -1)
+
+          if [ -z "$FOLDER" ]; then
+            FOLDER="endpoint"
+          fi
+
+          echo "folder_name=$FOLDER" >> $GITHUB_OUTPUT
+
+          echo "Folder: $FOLDER"
+
+      #################################################################
+      # Mostrar archivos
+      #################################################################
+
+      - name: Show generated files
+        working-directory: ./project
+        run: |
+          find src/test -type f
+
+      #################################################################
+      # Ejecutar pruebas
+      #################################################################
+
+      - name: Run Karate tests
+        if: ${{ github.event.inputs.run_tests == true }}
+        working-directory: ./project
+        continue-on-error: true
+        run: |
+
+          TAG="@${{ steps.generate.outputs.folder_name }}Services"
+
+          echo "Running tag: $TAG"
+
+          mvn clean test \
+            "-Dkarate.options=--tags $TAG" \
+            "-Dkarate.env=${{ github.event.inputs.karate_env }}" \
+            --no-transfer-progress
+
+      #################################################################
+      # Subir resultados Allure
+      #################################################################
+
+      - name: Upload Allure Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results
+          path: project/target/allure-results
+          if-no-files-found: warn
+
+      #################################################################
+      # Subir Surefire
+      #################################################################
+
+      - name: Upload Surefire Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: project/target/surefire-reports
+          if-no-files-found: warn
+
+      #################################################################
+      # Crear rama automática
+      #################################################################
+
+      - name: Create branch
+        if: ${{ github.event.inputs.commit_results == true }}
+        id: branch
+        working-directory: ./project
+        run: |
+
+          BRANCH=auto/karate-${{ github.run_number }}
+
+          git checkout -b "$BRANCH"
+
+          echo "branch_name=$BRANCH" >> $GITHUB_OUTPUT
+
+      #################################################################
+      # Commit y Push
+      #################################################################
+
+      - name: Commit generated tests
+        if: ${{ github.event.inputs.commit_results == true }}
+        working-directory: ./project
+        run: |
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "No changes detected"
+            exit 0
+          fi
+
+          git commit -m "feat(karate): auto-generated tests"
+
+          git push origin \
+            "${{ steps.branch.outputs.branch_name }}"
+
+      #################################################################
+      # Resumen
+      #################################################################
+
+      - name: Summary
+        run: |
+          echo "Repository : ${{ github.event.inputs.repo_url }}"
+          echo "Source branch : ${{ github.event.inputs.branch }}"
+          echo "Generated branch : auto/karate-${{ github.run_number }}"
+          echo "Environment : ${{ github.event.inputs.karate_env }}"
