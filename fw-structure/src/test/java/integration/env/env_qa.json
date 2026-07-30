@@ -1,0 +1,5 @@
+{
+  "host": {
+    "petstore_qa": "https://petstore.swagger.io"
+  }
+}
