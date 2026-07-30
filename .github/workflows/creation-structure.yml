@@ -19,6 +19,11 @@ on:
         description: 'Ingrese una de las siguientes opciones: 1) CURL 2) URL Swagger 3) Swagger JSON 4) Ruta del  Swagger JSON '
         required: true
 
+      NameSpace:
+        description: 'Servicio bajo prueba'
+        required: false
+        default: ''
+
       karate_env:
         description: 'Ambiente de ejecución'
         required: true
