@@ -15,8 +15,8 @@ on:
         required: true
         default: 'main'
 
-      curl_request:
-        description: 'Curl o request de Postman'
+      contrato_servicio:
+        description: 'Opciones: 1) CURL 2) URL Swagger 3) Swagger JSON 4) Ruta del  Swagger JSON '
         required: true
 
       karate_env:
@@ -72,7 +72,7 @@ jobs:
       - name: Save Curl Request
         run: |
           cat <<'EOF' > curl_input.txt
-          ${{ github.event.inputs.curl_request }}
+          ${{ github.event.inputs.contrato_servicio }}
           EOF
 
       - name: Compile Generator
