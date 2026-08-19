@@ -85,9 +85,9 @@ jobs:
       - name: Save Curl Request
         shell: powershell
         env:
-          CURL_REQUEST: ${{ github.event.inputs.curl_request }}
+          curl: ${{ github.event.inputs.curl_request }}
         run: |
-          $env:CURL_REQUEST | Out-File -FilePath curl_input.txt -Encoding utf8
+          $env:curl | Out-File -FilePath curl_input.txt -Encoding utf8
 
       - name: Compile Framework
         shell: powershell
@@ -99,9 +99,9 @@ jobs:
         shell: powershell
         working-directory: fw-structure
         env:
-          NAMESPACE: ${{ github.event.inputs.nameSpace }}
-          TARGET_PROJECT: ${{ github.workspace }}\project
-          CURL_FILE: ${{ github.workspace }}\curl_input.txt
+          nameSpace: ${{ github.event.inputs.nameSpace }}
+          pathRelativeFolder: ${{ github.workspace }}\project\src\test\java\integration
+          curl: ${{ github.workspace }}\curl_input.txt
           KARATE_ENV: ${{ github.event.inputs.karate_env }}
         run: |
           mvn exec:java
