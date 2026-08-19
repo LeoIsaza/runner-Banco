@@ -82,13 +82,6 @@ jobs:
           restore-keys: |
             maven-${{ runner.os }}
 
-      - name: Save Curl Request
-        shell: powershell
-        env:
-          curl: ${{ github.event.inputs.curl_request }}
-        run: |
-          $env:curl | Out-File -FilePath curl_input.txt -Encoding utf8
-
       - name: Compile Framework
         shell: powershell
         working-directory: fw-structure
@@ -101,7 +94,7 @@ jobs:
         env:
           nameSpace: ${{ github.event.inputs.nameSpace }}
           pathRelativeFolder: ${{ github.workspace }}\project\src\test\java\integration
-          curl: ${{ github.workspace }}\curl_input.txt
+          curl: ${{ github.event.inputs.curl_request }}
           KARATE_ENV: ${{ github.event.inputs.karate_env }}
         run: |
           mvn exec:java
