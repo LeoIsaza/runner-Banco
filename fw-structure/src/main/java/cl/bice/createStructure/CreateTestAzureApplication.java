@@ -1,36 +1,32 @@
+/**
+ * 
+ */
 package cl.bice.createStructure;
 
-import cl.bice.createStructure.service.test.CreateTestTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.Bean;
 
-/**
- * Aplicación Spring Boot para generar estructuras de test Karate.
- *
- * Modos de uso:
- *  1. Generar feature desde cURL (NUEVO - lineamientos 2026):
- *     Configurar application.properties (karate.project.root + curl) y ejecutar.
- *
- *  2. Crear tests en Azure DevOps (flujo legado):
- *     Configurar pathRelativeFileOrFolderProcess, azureUser, azurePass.
- */
+import cl.bice.createStructure.service.CreateTestService;
+
 @SpringBootApplication
 public class CreateTestAzureApplication {
 
-    public static void main(String[] args) throws Exception {
-        // Si se detecta "curl" en properties o env, usar el generador nuevo
-        String curlFromEnv = System.getenv("curl");
-        String curlFromProp = System.getProperty("curl", "");
+	public static void main(String[] args) {
+		SpringApplication.run(CreateTestAzureApplication.class, args);
+	}
+	
 
-        if ((curlFromEnv != null && !curlFromEnv.trim().isEmpty())
-                || !curlFromProp.trim().isEmpty()) {
-            // Modo: generar feature desde cURL
-            System.out.println("[App] Modo: Generación de Feature desde cURL");
-            CreateTestTemplate.main(args);
-        } else {
-            // Modo: procesamiento Azure (legado)
-            System.out.println("[App] Modo: Procesamiento Azure DevOps");
-            SpringApplication.run(CreateTestAzureApplication.class, args);
-        }
-    }
+	@Autowired
+	private CreateTestService createTestService;
+
+	@Bean
+	public CommandLineRunner commandLineRunner(ApplicationContext ctx) {
+		return args -> createTestService.create();
+
+	}
+
 }

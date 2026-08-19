@@ -1,0 +1,1 @@
+Esta carpeta debe contener los certificados necesarios para las automatizaciones.

@@ -63,7 +63,7 @@ public class ApiParserExample {
     private static final List<String> NAMES_REMOVE = Arrays.asList("cause", "stackTrace", "suppressed", "localizedMessage");
 
     //private static final String URL_API_DOC = "http://localhost:"+System.getenv("puerto")+"/v3/api-docs";
-    private static final String URL_API_DOC = "https://api.midominio.com/"+System.getenv("servicio")+"/v3/api-docs";
+    private static final String URL_API_DOC = "https://api-baas-dev-test.bice.local/"+System.getenv("servicio")+"/v3/api-docs";
 
 
     public static void main(String[] args) {

@@ -4,325 +4,296 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.net.URL;
 import java.util.*;
-import java.util.regex.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-/**
- * Convierte un cURL al formato intermedio ServiceKarateTO.
- *
- * Reconoce automáticamente:
- *  - OBAPI  : host contiene "obapi" o headers X-Token-Type / X-Target-Unit presentes
- *  - Services/BaaS : resto
- *
- * Extrae:
- *  - URL completa (host + path)
- *  - Método HTTP
- *  - Headers (filtra Cookie y Authorization — no se hardcodean)
- *  - Body JSON → schema de tipos
- *  - operationId, name, component, namespace
- */
 public class CurlToCustomFormat {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    /** Headers que NUNCA se hardcodean en la feature (lineamiento COE QA 2026) */
-    private static final Set<String> HEADERS_EXCLUDE = new HashSet<>(Arrays.asList(
-            "Cookie", "Authorization", "Accept-Encoding", "Accept-Language",
-            "Accept", "User-Agent", "Connection"
+    // Forzar tipos "Integer" (según tu ejemplo)
+    private static final Set<String> FORCE_INTEGER_FIELDS = new HashSet<>(Arrays.asList(
+            "beneficiary_account" // puedes añadir "payer_account", "payer_institution", "numeric_reference", etc.
     ));
 
-    // ── ENTRY POINT ─────────────────────────────────────────────────────────────
+    // Marcar como numberString (UUIDs u otros campos que quieres tratar como string numérica)
+    private static final Set<String> FORCE_NUMBERSTRING_FIELDS = new HashSet<>(Arrays.asList(
+            "id_msg", "id"
+    ));
 
+    /**
+     * Convierte un comando curl al formato requerido.
+     * @param curl Comando curl completo
+     * @param strictJson true para producir JSON estricto (válido); false para producir el formato no-estricto que pediste
+     * @return String con el documento formateado
+     */
     public static String convert(String curl, boolean strictJson) throws Exception {
-        String fullUrl  = extractUrl(curl);
-        String method   = extractMethod(curl);
-        Map<String, String> headers = extractHeaders(curl);
-        String body     = extractBody(curl);
+        String url = extractUrl(curl);
+        String method = extractMethod(curl);
+        LinkedHashMap<String, String> headers = extractHeaders(curl);
+        String body = extractBody(curl);
 
-        // Detectar tipo antes de filtrar headers
-        boolean isObapi = detectObapi(fullUrl, headers);
+        // Filtrar headers que no quieres en parameters (ej. Cookie)
+        headers.remove("Cookie");
 
-        // Filtrar headers — los OBAPI se manejan via get_token (no hardcodear)
-        Map<String, String> filteredHeaders = new LinkedHashMap<>();
-        for (Map.Entry<String, String> e : headers.entrySet()) {
-            if (!HEADERS_EXCLUDE.contains(e.getKey())) {
-                // Para OBAPI, también excluir X-Target-Unit y X-Token-Type
-                // (se agregan automáticamente en la feature)
-                if (isObapi && (e.getKey().equals("X-Target-Unit")
-                        || e.getKey().equals("X-Token-Type"))) continue;
-                filteredHeaders.put(e.getKey(), e.getValue());
-            }
-        }
+// Derivar name y operationId
+        String name = extractNameFromUrl(url).indexOf("?") > 0 ? extractNameFromUrl(url).substring(0,extractNameFromUrl(url).indexOf("?")) : extractNameFromUrl(url);
+        String operationId = toCamelCase(name);
 
-        // Derivar nombres desde URL
-        UrlInfo urlInfo = parseUrl(fullUrl);
-
-        // Parsear body
+        // Parsear el body de ejemplo
         JsonNode example = null;
         if (body != null && !body.trim().isEmpty()) {
-            try { example = MAPPER.readTree(body); }
-            catch (Exception ex) { System.out.println("[CurlToCustomFormat] Body no es JSON válido: " + ex.getMessage()); }
+            example = MAPPER.readTree(body);
         }
 
-        // Construir schema del body
+        // Construir esquema a partir del ejemplo
         ObjectNode jsonBodySchema = MAPPER.createObjectNode();
         if (example != null && example.isObject()) {
-            jsonBodySchema.setAll(buildSchema((ObjectNode) example));
+            ObjectNode schema = buildSchemaFromExample((ObjectNode) example);
+            jsonBodySchema.setAll(schema);
         }
 
-        return renderJson(urlInfo, method, filteredHeaders, jsonBodySchema, example, isObapi);
+        // Generar JSON estricto válido
+        return renderStrictJson(name, operationId, url, method, headers, jsonBodySchema, example);
     }
 
-    // ── DETECCIÓN OBAPI ──────────────────────────────────────────────────────────
+    // =================== Renderers ===================
 
-    public static boolean detectObapi(String url, Map<String, String> headers) {
-        if (url != null && url.toLowerCase().contains("obapi")) return true;
-        if (headers.containsKey("X-Token-Type"))  return true;
-        if (headers.containsKey("X-Target-Unit")) return true;
-        return false;
-    }
-
-    // ── URL PARSING ─────────────────────────────────────────────────────────────
-
-    static UrlInfo parseUrl(String fullUrl) {
-        try {
-            // Quitar query string para analizar el path
-            String urlNoQuery = fullUrl.contains("?") ? fullUrl.substring(0, fullUrl.indexOf('?')) : fullUrl;
-            URL u = new URL(urlNoQuery);
-            String host = u.getHost();
-            String port = u.getPort() > 0 ? ":" + u.getPort() : "";
-            String origin = u.getProtocol() + "://" + host + port;
-            String[] segs = u.getPath().split("/");
-
-            boolean isObapi = host.contains("obapi");
-
-            // Detectar vX en el path
-            int vIdx = -1;
-            for (int i = 0; i < segs.length; i++) {
-                if (segs[i].matches("v\\d+")) { vIdx = i; break; }
-            }
-
-            // Filtrar segmentos que son path params (numéricos largos o UUIDs)
-            // Para el name y component
-            List<String> nonParam = new ArrayList<>();
-            List<String> paramValues = new ArrayList<>();
-            List<String> paramNames = new ArrayList<>();
-
-            for (String seg : segs) {
-                if (seg.isEmpty()) continue;
-                if (isPathParam(seg)) {
-                    // Crear nombre del param basado en el segmento anterior
-                    String prev = nonParam.isEmpty() ? "param" : nonParam.get(nonParam.size()-1);
-                    String pName = "_" + toSnakeUpper(prev).replaceAll("S$","") + "_ID";
-                    paramValues.add(seg);
-                    paramNames.add(pName);
-                } else {
-                    nonParam.add(seg);
-                }
-            }
-
-            // lastOp = último segmento no-param
-            String lastOp = nonParam.isEmpty() ? "operation" : nonParam.get(nonParam.size()-1);
-
-            // component:
-            // OBAPI: segmento DESPUÉS de v1 (ej /v1/tdpay/createtdpayIn → tdpay)
-            // BaaS:  segmento ANTES de v1  (ej /bice-current-account-atm-withdrawal/v1/... → bice-current-account-atm-withdrawal)
-            String component;
-            if (isObapi && vIdx != -1 && vIdx + 1 < segs.length && !segs[vIdx+1].isEmpty()) {
-                component = segs[vIdx + 1];
-            } else if (!isObapi && vIdx > 0) {
-                component = segs[vIdx - 1];
-            } else if (nonParam.size() >= 2) {
-                component = nonParam.get(nonParam.size() - 2);
-            } else {
-                component = nonParam.isEmpty() ? "service" : nonParam.get(0);
-            }
-
-            // envKey desde el host
-            String hp = host.split("\\.")[0];
-            Map<String, String> km = new HashMap<>();
-            km.put("api-baas-qa-test", "api_baas");
-            km.put("api-baas-qa",      "api_baas");
-            km.put("obapi-qa",         "obapi_qa");
-            String envKey = km.getOrDefault(hp,
-                    hp.replaceAll("-qa[^.]*$","").replace("-","_") + "_qa");
-
-            return new UrlInfo(fullUrl, origin, u.getPath(), component, lastOp, envKey,
-                    isObapi, paramValues, paramNames);
-
-        } catch (Exception e) {
-            // Fallback mínimo
-            String name = fullUrl.substring(fullUrl.lastIndexOf('/') + 1);
-            if (name.contains("?")) name = name.substring(0, name.indexOf('?'));
-            return new UrlInfo(fullUrl, fullUrl, "/", name, name, "api_baas",
-                    false, Collections.emptyList(), Collections.emptyList());
-        }
-    }
-
-    private static boolean isPathParam(String seg) {
-        return seg.matches("\\d{4,}") || seg.matches("[0-9a-fA-F]{8}-.*");
-    }
-
-    private static String toSnakeUpper(String s) {
-        return s.replace("-","_").toUpperCase();
-    }
-
-    // ── JSON RENDERER ────────────────────────────────────────────────────────────
-
-    private static String renderJson(UrlInfo ui, String method, Map<String, String> headers,
-            ObjectNode schema, JsonNode example, boolean isObapi) throws Exception {
-
+    private static String renderStrictJson(String name, String operationId, String url, String method,
+                                           Map<String, String> headers, ObjectNode schema, JsonNode example) throws Exception {
         Map<String, Object> root = new LinkedHashMap<>();
-        root.put("name",        ui.component);
-        root.put("tagName",     null);
+        root.put("name", name);
+        root.put("tagName", null);
         root.put("description", "");
-        root.put("isObapi",     isObapi);
-        root.put("envKey",      ui.envKey);
-        root.put("origin",      ui.origin);
 
         Map<String, Object> op = new LinkedHashMap<>();
-        op.put("operationId",  ui.lastOp);
-        op.put("path",         ui.fullUrl);
-        op.put("httpMethod",   method);
-        op.put("headers",      headers);
+        op.put("operationId", operationId);
+        op.put("path", url);
+        op.put("httpMethod", method);
+        op.put("headers", headers);
 
-        Map<String, Object> reqBody = new LinkedHashMap<>();
-        reqBody.put("jsonBody", MAPPER.readValue(MAPPER.writeValueAsString(schema), Map.class));
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("jsonBody", MAPPER.readValue(MAPPER.writeValueAsString(schema), Map.class));
         if (example != null) {
-            reqBody.put("example", MAPPER.readValue(MAPPER.writeValueAsString(example), Map.class));
+            requestBody.put("example", MAPPER.readValue(MAPPER.writeValueAsString(example), Map.class));
         }
-        op.put("requestBody",          reqBody);
+        op.put("requestBody", requestBody);
         op.put("requestFuntionalBody", example);
 
-        List<Map<String, Object>> ops = Collections.singletonList(op);
+
+        List<Map<String, Object>> ops = new ArrayList<>();
+        ops.add(op);
         root.put("operations", ops);
 
         return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root);
     }
 
-    // ── SCHEMA BUILDER ───────────────────────────────────────────────────────────
-
-    private static ObjectNode buildSchema(ObjectNode example) {
-        ObjectNode schema = MAPPER.createObjectNode();
-        example.fields().forEachRemaining(entry -> {
-            String key = entry.getKey();
-            JsonNode val = entry.getValue();
-            if (val.isObject()) {
-                ObjectNode nested = buildSchema((ObjectNode) val);
-                nested.put("type", "object");
-                schema.set(key, nested);
-            } else {
-                schema.set(key, inferLeaf(key, val));
-            }
-        });
-        return schema;
-    }
-
     /**
-     * Tipos soportados: string | integer | boolean | email | date
-     * Deteccion 100% generica (sin nombres de campo de ningun cliente/empresa):
-     *  - por el VALOR del ejemplo (formato de correo, formato de fecha, numero, boolean)
-     *  - complementado por palabras clave genericas y bilingues en el nombre del campo
-     *    (email/correo/mail, fecha/date) que aplican a cualquier API, no a una en particular.
+     * Renderiza el formato no-estricto con:
+     * - parameters como una lista de líneas "clave":"valor"
+     * - una línea con 'Authorization: Bearer ...'
+     * - y luego "Authorization": ""
      */
-    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]{2,}$");
-    private static final Pattern DATE_PATTERN  = Pattern.compile(
-            "^\\d{4}-\\d{2}-\\d{2}([T ][\\d:.Z+-]+)?$|^\\d{2}/\\d{2}/\\d{4}$");
-    private static final Set<String> EMAIL_HINTS = new HashSet<>(Arrays.asList("email", "correo", "mail"));
-    private static final Set<String> DATE_HINTS  = new HashSet<>(Arrays.asList("fecha", "date"));
+    private static String renderNonStrict(String name, String operationId, String url, String method,
+                                          Map<String, String> headers, ObjectNode schema) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\n");
+        sb.append("\t\"name\" : \"").append(name).append("\",\n");
+        sb.append("\t\"tagName\" : null,\n");
+        sb.append("\t\"description\" : \"\",\n");
+        sb.append("\t\"operations\" : [ {\n");
+        sb.append("\t\t\"operationId\" : \"").append(operationId).append("\",\n");
+        sb.append("\t\t\"path\" : \"").append(url).append("\",\n");
+        sb.append("\t\t\"httpMethod\" : \"").append(method).append("\",\n");
+        sb.append("\t\t\"parameters\" : [\n").append(headers).append("],\n");
 
-    private static ObjectNode inferLeaf(String field, JsonNode val) {
-        ObjectNode leaf = MAPPER.createObjectNode();
-        String type = detectType(field, val);
-        leaf.put("type",         type);
-        leaf.put("numberString", "integer".equals(type));
-        leaf.put("required",     true);
-        leaf.put("minLength",    1);
-        leaf.put("maxLength",    100);
-        leaf.put("values",       MAPPER.createArrayNode());
-        return leaf;
-    }
+        // Imprimir headers excepto Authorization (para ubicarlo especial) y Content-Type al final si quieres
+        String authValue = headers.get("Authorization");
+        String contentType = headers.get("Content-Type");
 
-    private static String detectType(String field, JsonNode val) {
-        String fLow = field == null ? "" : field.toLowerCase();
-        if (val == null || val.isNull()) {
-            if (hasHint(fLow, EMAIL_HINTS)) return "email";
-            if (hasHint(fLow, DATE_HINTS))  return "date";
-            return "string";
+        // Orden sugerida: todos los X-* primero
+        List<String> keys = new ArrayList<>(headers.keySet());
+        keys.remove("Content-Type");
+        keys.sort((a, b) -> {
+            boolean ax = a.startsWith("X-");
+            boolean bx = b.startsWith("X-");
+            if (ax != bx) return ax ? -1 : 1;
+            return a.compareToIgnoreCase(b);
+        });
+
+        // X-* headers
+        for (int i = 0; i < keys.size(); i++) {
+            String k = keys.get(i);
+            String v = headers.get(k);
+            sb.append("\t\t\t\"").append(k).append("\":\"").append(escape(v)).append("\",\n");
         }
-        if (val.isBoolean()) return "boolean";
-        if (val.isNumber())  return "integer";
 
-        String text = val.asText();
-        if (hasHint(fLow, EMAIL_HINTS) || EMAIL_PATTERN.matcher(text).matches()) return "email";
-        if (hasHint(fLow, DATE_HINTS)  || DATE_PATTERN.matcher(text).matches())  return "date";
-        if (text.matches("^\\d+$") && text.length() <= 10) return "integer";
-        return "string";
+        // Content-Type (si existe)
+        if (contentType != null) {
+            sb.append("\t\t\t\"Content-Type\":\"").append(escape(contentType)).append("\",\n");
+        }
+
+        // requestBody.jsonBody (esquema)
+        sb.append("\t\t\"requestBody\" : {\n");
+        sb.append("\t\t\t\"jsonBody\" : ");
+        sb.append(prettyPrint(schema).replaceAll("(?m)^", "\t\t\t")); // sangría
+        sb.append("\n\t\t}\n");
+
+        sb.append("\t}]\n");
+        sb.append("}\n");
+        return sb.toString()
+                // Arreglo de comas finales si quedaron (por la línea de Authorization especial)
+                .replaceAll(",\\n\\s*'Authorization:", "\n\t\t\t'Authorization:")
+                .replaceAll(",\\n\\s*\\t\\t\\]","\\n\t\t]");
     }
 
-    private static boolean hasHint(String fieldLower, Set<String> hints) {
-        for (String h : hints) if (fieldLower.contains(h)) return true;
-        return false;
+    private static String prettyPrint(JsonNode node) {
+        try {
+            return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(node);
+        } catch (Exception e) {
+            return "{}";
+        }
     }
 
-    // ── CURL PARSERS ─────────────────────────────────────────────────────────────
+    private static String escape(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    // =================== Parsers ===================
 
     private static String extractUrl(String curl) {
-        for (Pattern p : Arrays.asList(
-                Pattern.compile("--location\\s+'(https?://[^']+)'"),
-                Pattern.compile("--location\\s+\"(https?://[^\"]+)\""),
-                Pattern.compile("(https?://[^\\s'\"\\\\]+)"))) {
-            Matcher m = p.matcher(curl);
-            if (m.find()) return m.group(1).trim();
-        }
-        throw new IllegalArgumentException("No se pudo extraer la URL del cURL");
+        // Soporta: curl --location 'URL' o "URL"
+        Pattern p = Pattern.compile("--location\\s+(['\"])(https?://[^'\"]+)\\1", Pattern.CASE_INSENSITIVE);
+        Matcher m = p.matcher(curl);
+        if (m.find()) return m.group(2);
+
+        // Fallback: primera URL
+        p = Pattern.compile("(https?://[^\\s'\"\\\\]+)");
+        m = p.matcher(curl);
+        if (m.find()) return m.group(1);
+
+        throw new IllegalArgumentException("No se pudo extraer la URL del curl.");
     }
 
     private static String extractMethod(String curl) {
-        Matcher m = Pattern.compile("-X\\s+['\"']?(\\w+)").matcher(curl);
-        if (m.find()) return m.group(1).toUpperCase();
-        Matcher m2 = Pattern.compile("--request\\s+['\"']?(\\w+)").matcher(curl);
-        if (m2.find()) return m2.group(1).toUpperCase();
-        return (curl.contains("--data") || curl.contains("--data-raw")) ? "POST" : "GET";
+        // curl suele usar --data/--data-raw para POST
+        Pattern pX = Pattern.compile("-X\\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)", Pattern.CASE_INSENSITIVE);
+        Matcher m = pX.matcher(curl);
+        if (m.find()) return m.group(1).toUpperCase(Locale.ROOT);
+        return curl.contains("--data") || curl.contains("--data-raw") ? "POST" : "GET";
     }
 
-    private static Map<String, String> extractHeaders(String curl) {
-        Map<String, String> h = new LinkedHashMap<>();
-        Matcher m = Pattern.compile("--header\\s+'([^']+)'",
-                Pattern.DOTALL | Pattern.CASE_INSENSITIVE).matcher(curl);
+    private static LinkedHashMap<String, String> extractHeaders(String curl) {
+        LinkedHashMap<String, String> headers = new LinkedHashMap<>();
+        Pattern p = Pattern.compile("--header\\s+(['\"])([^:'\"]+)\\s*:\\s*(.*?)\\1", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
+        Matcher m = p.matcher(curl);
         while (m.find()) {
-            int ci = m.group(1).indexOf(':');
-            if (ci > -1) {
-                h.put(m.group(1).substring(0, ci).trim(),
-                      m.group(1).substring(ci + 1).trim());
-            }
+            String key = m.group(2).trim();
+            String value = m.group(3).trim();
+            headers.put(key, value);
         }
-        return h;
+        return headers;
     }
 
     private static String extractBody(String curl) {
-        // --data '{...}' o --data-raw '{...}'
-        Matcher m = Pattern.compile("--data(?:-raw)?\\s+'([\\s\\S]*?)'(?:\\s*$|\\s*--)",
-                Pattern.MULTILINE).matcher(curl);
-        if (m.find()) return m.group(1).trim();
-        // fallback: encontrar primer { hasta último }
-        int bi = curl.indexOf('{'); int be = curl.lastIndexOf('}');
-        if (bi != -1 && be > bi) return curl.substring(bi, be + 1);
+        Pattern p = Pattern.compile("--data(?:-raw)?\\s+(['\"])(\\{[\\s\\S]*?)\\1", Pattern.DOTALL);
+        Matcher m = p.matcher(curl);
+        if (m.find()) return m.group(2);
         return null;
     }
 
-    // ── DTO ─────────────────────────────────────────────────────────────────────
+    // =================== Schema builder ===================
 
-    public static class UrlInfo {
-        public final String fullUrl, origin, path, component, lastOp, envKey;
-        public final boolean isObapi;
-        public final List<String> paramValues, paramNames;
+    private static ObjectNode buildSchemaFromExample(ObjectNode example) {
+        ObjectNode schema = MAPPER.createObjectNode();
 
-        UrlInfo(String fu, String or, String p, String comp, String lo, String ek,
-                boolean ob, List<String> pv, List<String> pn) {
-            fullUrl=fu; origin=or; path=p; component=comp; lastOp=lo; envKey=ek;
-            isObapi=ob; paramValues=pv; paramNames=pn;
+        // Top-level
+        example.fields().forEachRemaining(entry -> {
+            String field = entry.getKey();
+            JsonNode value = entry.getValue();
+            if ("body".equals(field) && value.isObject()) {
+                // Objeto anidado
+                ObjectNode bodyNode = MAPPER.createObjectNode();
+
+                // Recorremos campos internos del body
+                value.fields().forEachRemaining(inner -> {
+                    String f = inner.getKey();
+                    JsonNode v = inner.getValue();
+                    bodyNode.set(f, inferScalarSchema(f, v));
+                });
+                bodyNode.put("type", "object");
+                schema.set("body", bodyNode);
+            } else if (value.isValueNode()) {
+                schema.set(field, inferScalarSchema(field, value));
+            }
+        });
+
+        return schema;
+    }
+
+    private static ObjectNode inferScalarSchema(String fieldName, JsonNode value) {
+        ObjectNode leaf = MAPPER.createObjectNode();
+
+        boolean isUuid = value.isTextual() && looksLikeUUID(value.asText());
+
+        boolean numberString = FORCE_NUMBERSTRING_FIELDS.contains(fieldName) || isUuid;
+        String type;
+
+        if (FORCE_INTEGER_FIELDS.contains(fieldName)) {
+            type = "Integer";
+            numberString = false;
+        } else {
+            // Heurística simple
+            if (value.isNumber()) {
+                type = "Integer";
+            } else if (value.isTextual() && value.asText().matches("^\\d+$") && value.asText().length() <= 10) {
+                type = "Integer";
+                numberString = false;
+            } else {
+                type = "string";
+            }
         }
+
+        // Enum para msg_name según tu ejemplo
+        if ("msg_name".equals(fieldName) && value.isTextual()) {
+            leaf.put("numberString", false);
+            leaf.set("values", MAPPER.createArrayNode().add(value.asText()));
+        } else {
+            leaf.put("numberString", numberString);
+            leaf.set("values", MAPPER.createArrayNode());
+        }
+
+        leaf.put("minLength", 1);
+        leaf.put("type", type);
+        leaf.put("maxLength", 100);
+        leaf.put("required", true);
+
+        return leaf;
+    }
+
+    // =================== Helpers ===================
+
+    private static boolean looksLikeUUID(String s) {
+        return s.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+    }
+
+    private static String extractNameFromUrl(String url) {
+        String path = url.replaceAll("^https?://[^/]+", "");
+        if (path.endsWith("/")) path = path.substring(0, path.length() - 1);
+        int idx = path.lastIndexOf('/');
+        return (idx >= 0) ? path.substring(idx + 1) : path;
+    }
+
+    private static String toCamelCase(String name) {
+        String[] parts = name.split("[-_]");
+        if (parts.length == 0) return name;
+        StringBuilder sb = new StringBuilder(parts[0]);
+        for (int i = 1; i < parts.length; i++) {
+            if (parts[i].isEmpty()) continue;
+            sb.append(parts[i].substring(0, 1).toUpperCase(Locale.ROOT));
+            sb.append(parts[i].substring(1));
+        }
+        return sb.toString();
     }
 }

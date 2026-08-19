@@ -15,8 +15,6 @@ public class CreateTemplate {
 
     public static void main(String[] args) {
 
-
-
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
         JsonObject jsonObject = gson.fromJson(plantilla, JsonObject.class);
 

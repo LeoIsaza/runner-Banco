@@ -26,13 +26,13 @@ public class RestTemplateWithCert {
     public RestTemplate createRestTemplate() throws Exception {
         // Cargar el KeyStore con el certificado
         KeyStore keyStore = KeyStore.getInstance("pkcs12"); // O "JKS" según el formato
-        try (InputStream keyStoreStream = Files.newInputStream(Paths.get(System.getProperty("keystore.path", "src/main/java/cl/bice/cert/keystore.pfx")))) {
-            keyStore.load(keyStoreStream, System.getProperty("keystore.password", "changeit").toCharArray());
+        try (InputStream keyStoreStream = Files.newInputStream(Paths.get("src/main/java/cl/bice/cert/api-baas-qa.pfx"))) {
+            keyStore.load(keyStoreStream, "changeit".toCharArray());
         }
 
         // Crear el contexto SSL
         SSLContext sslContext = org.apache.http.ssl.SSLContexts.custom()
-                .loadKeyMaterial(keyStore, System.getProperty("keystore.password", "changeit").toCharArray()) // Contraseña del certificado
+                .loadKeyMaterial(keyStore, "changeit".toCharArray()) // Contraseña del certificado
                 .build();
 
 
@@ -53,16 +53,16 @@ public class RestTemplateWithCert {
     public RestTemplate createRestTemplate1() throws Exception {
         // Cargar el KeyStore con el certificado
         KeyStore keyStore = KeyStore.getInstance("pkcs12"); // O "JKS" según el formato
-        try (InputStream keyStoreStream = Files.newInputStream(Paths.get(System.getProperty("keystore.path", "src/main/java/cl/bice/cert/keystore.pfx")))) {
-            keyStore.load(keyStoreStream, System.getProperty("keystore.password", "changeit").toCharArray());
+        try (InputStream keyStoreStream = Files.newInputStream(Paths.get("src/main/java/cl/bice/cert/api-baas-qa.pfx"))) {
+            keyStore.load(keyStoreStream, "changeit".toCharArray());
         }
 
         // Crear el contexto SSL
         SSLContext sslContext = org.apache.http.ssl.SSLContexts.custom()
-                .loadKeyMaterial(keyStore, System.getProperty("keystore.password", "changeit").toCharArray()) // Contraseña del certificado
+                .loadKeyMaterial(keyStore, "changeit".toCharArray()) // Contraseña del certificado
                 .build();
 
-        HttpHost proxy = new HttpHost(System.getProperty("proxy.host", "http://localhost"));
+        HttpHost proxy = new HttpHost("https://api-baas-dev-test.bice.local/");
         DefaultProxyRoutePlanner routePlanner = new DefaultProxyRoutePlanner(proxy);
         // Configurar el cliente HTTP con SSL
         SSLConnectionSocketFactory socketFactory = new SSLConnectionSocketFactory(sslContext);
