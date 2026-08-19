@@ -1,0 +1,195 @@
+name: Service Swagger Generator & Runner
+
+run-name: Karate Generator - ${{ github.event.inputs.branch }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_url:
+        description: 'Git Repository URL'
+        required: true
+
+      branch:
+        description: 'Branch to clone'
+        required: true
+        default: 'main'
+
+      nameSpace:
+        description: 'Name of the service'
+        required: true
+
+      Swagger_Url:
+        description: 'Url swagger'
+        required: true
+
+      karate_env:
+        description: 'Execution Environment'
+        required: true
+        default: 'qa'
+
+      run_tests:
+        description: 'Execute Tests'
+        required: true
+        default: true
+        type: boolean
+
+      commit_results:
+        description: 'Commit and Push'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  generate-and-run:
+
+    runs-on:
+      - self-hosted
+      - Windows
+
+    steps:
+
+      - name: Checkout Runner Repository
+        uses: actions/checkout@v4
+
+      - name: Clone Target Repository
+        shell: powershell
+        run: |
+          if (Test-Path project) {
+            Remove-Item project -Recurse -Force
+          }
+
+          git clone -b "${{ github.event.inputs.branch }}" "${{ github.event.inputs.repo_url }}" project
+
+          Write-Host "Repository cloned successfully"
+
+      - name: Setup Java 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Verify Java
+        shell: powershell
+        run: |
+          java -version
+          mvn -version
+
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('fw-structure/pom.xml') }}
+          restore-keys: |
+            maven-${{ runner.os }}
+
+      - name: Compile Framework
+        shell: powershell
+        working-directory: fw-structure
+        run: |
+          mvn clean compile -DskipTests
+
+      - name: Execute CreateTestTemplate
+        shell: powershell
+        working-directory: fw-structure
+        env:
+          nameSpace: ${{ github.event.inputs.nameSpace }}
+          pathRelativeFolder: ${{ github.workspace }}\project\src\test\java\integration
+          curl: ${{ github.event.inputs.curl_request }}
+          KARATE_ENV: ${{ github.event.inputs.karate_env }}
+        run: |
+          mvn exec:java
+
+      - name: Show Generated Files
+        shell: powershell
+        working-directory: project
+        run: |
+          Get-ChildItem -Recurse
+
+      - name: Run Karate Tests
+        if: ${{ github.event.inputs.run_tests }}
+        shell: powershell
+        working-directory: project
+        continue-on-error: true
+        run: |
+          $TAG = "@${{ github.event.inputs.nameSpace }}"
+
+          Write-Host "Executing tag $TAG"
+
+          mvn clean test "-Dkarate.options=--tags $TAG" "-Dkarate.env=${{ github.event.inputs.karate_env }}" --no-transfer-progress
+
+      - name: Upload Allure Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results
+          path: project/target/allure-results
+          if-no-files-found: warn
+
+      - name: Upload Karate Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: karate-reports
+          path: project/target/karate-reports
+          if-no-files-found: warn
+
+      - name: Create Automation Branch
+        if: ${{ github.event.inputs.commit_results }}
+        id: branch
+        shell: powershell
+        working-directory: project
+        run: |
+          $branchName = "auto/karate-${{ github.run_number }}"
+
+          git checkout -b $branchName
+
+          "branch_name=$branchName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Commit Generated Tests
+        if: ${{ github.event.inputs.commit_results }}
+        shell: powershell
+        working-directory: project
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .
+
+          git diff --cached --quiet
+
+          if ($LASTEXITCODE -eq 0) {
+              Write-Host "No changes to commit"
+              exit 0
+          }
+
+          git commit -m "feat(karate): auto-generated tests"
+
+      - name: Configure Git Authentication
+        if: ${{ github.event.inputs.commit_results }}
+        shell: powershell
+        working-directory: project
+        run: |
+          $AUTH_URL = "${{ github.event.inputs.repo_url }}".Replace(
+            "https://",
+            "https://x-access-token:${{ secrets.PAT_TOKEN }}@"
+          )
+
+          git remote set-url origin $AUTH_URL
+
+      - name: Push Branch
+        if: ${{ github.event.inputs.commit_results }}
+        shell: powershell
+        working-directory: project
+        run: |
+          git push --set-upstream origin "${{ steps.branch.outputs.branch_name }}"
+
+      - name: Summary
+        shell: powershell
+        run: |
+          Write-Host "========================================"
+          Write-Host "Repository: ${{ github.event.inputs.repo_url }}"
+          Write-Host "Branch: ${{ github.event.inputs.branch }}"
+          Write-Host "Namespace: ${{ github.event.inputs.nameSpace }}"
+          Write-Host "Environment: ${{ github.event.inputs.karate_env }}"
+          Write-Host "Runner: Self Hosted Windows"
+          Write-Host "========================================"
