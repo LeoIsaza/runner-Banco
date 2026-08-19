@@ -6,125 +6,123 @@ on:
   workflow_dispatch:
     inputs:
       repo_url:
-        description: 'Git repository URL'
+        description: 'Git Repository URL'
         required: true
-        default: 'https://github.com/user/repo.git'
 
       branch:
         description: 'Branch to clone'
         required: true
         default: 'main'
 
+      nameSpace:
+        description: 'Name of the service'
+        required: true
+
       curl_request:
-        description: 'Curl o request de Postman'
+        description: 'Curl or Postman Request'
         required: true
 
       karate_env:
-        description: 'Ambiente de ejecución'
+        description: 'Execution Environment'
         required: true
         default: 'qa'
 
       run_tests:
-        description: 'Ejecutar pruebas'
+        description: 'Execute Tests'
         required: true
         default: true
         type: boolean
 
       commit_results:
-        description: 'Commit y push'
+        description: 'Commit and Push'
         required: true
         default: true
         type: boolean
 
 jobs:
   generate-and-run:
-    runs-on: ubuntu-latest
+
+    runs-on:
+      - self-hosted
+      - Windows
 
     steps:
 
-      - name: Checkout Pipeline Repository
+      - name: Checkout Runner Repository
         uses: actions/checkout@v4
 
       - name: Clone Target Repository
+        shell: powershell
         run: |
-          git clone \
-            -b "${{ github.event.inputs.branch }}" \
-            "${{ github.event.inputs.repo_url }}" \
-            project
+          if (Test-Path project) {
+            Remove-Item project -Recurse -Force
+          }
 
-          echo "Repositorio clonado"
-          ls -la project
+          git clone -b "${{ github.event.inputs.branch }}" "${{ github.event.inputs.repo_url }}" project
 
-      - name: Set up Java
+          Write-Host "Repository cloned successfully"
+
+      - name: Setup Java 11
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '11'
+
+      - name: Verify Java
+        shell: powershell
+        run: |
+          java -version
+          mvn -version
 
       - name: Cache Maven
         uses: actions/cache@v4
         with:
-          path: ~/.m2
-          key: maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('fw-structure/pom.xml') }}
           restore-keys: |
             maven-${{ runner.os }}
 
       - name: Save Curl Request
+        shell: powershell
+        env:
+          CURL_REQUEST: ${{ github.event.inputs.curl_request }}
         run: |
-          cat <<'EOF' > curl_input.txt
-          ${{ github.event.inputs.curl_request }}
-          EOF
+          $env:CURL_REQUEST | Out-File -FilePath curl_input.txt -Encoding utf8
 
-      - name: Compile Generator
-        working-directory: ./project
+      - name: Compile Framework
+        shell: powershell
+        working-directory: fw-structure
         run: |
-          mkdir -p .github/scripts/out
+          mvn clean compile -DskipTests
 
-          javac \
-            .github/scripts/GenerateFeature.java \
-            -d .github/scripts/out
-
-      - name: Generate Karate Tests
-        id: generate
-        working-directory: ./project
+      - name: Execute CreateTestTemplate
+        shell: powershell
+        working-directory: fw-structure
+        env:
+          NAMESPACE: ${{ github.event.inputs.nameSpace }}
+          TARGET_PROJECT: ${{ github.workspace }}\project
+          CURL_FILE: ${{ github.workspace }}\curl_input.txt
+          KARATE_ENV: ${{ github.event.inputs.karate_env }}
         run: |
-
-          OUTPUT=$(java \
-            -cp .github/scripts/out \
-            GenerateFeature \
-            --curl-file ../curl_input.txt)
-
-          echo "$OUTPUT"
-
-          FOLDER=$(echo "$OUTPUT" | grep -oP "(?<=Estructura generada para ')[^']+" | head -1)
-
-          if [ -z "$FOLDER" ]; then
-            FOLDER="endpoint"
-          fi
-
-          echo "folder_name=$FOLDER" >> "$GITHUB_OUTPUT"
-
-          echo "Folder generado: $FOLDER"
+          mvn exec:java
 
       - name: Show Generated Files
-        working-directory: ./project
+        shell: powershell
+        working-directory: project
         run: |
-          find src/test -type f || true
+          Get-ChildItem -Recurse
 
       - name: Run Karate Tests
         if: ${{ github.event.inputs.run_tests }}
-        working-directory: ./project
+        shell: powershell
+        working-directory: project
         continue-on-error: true
         run: |
+          $TAG = "@${{ github.event.inputs.nameSpace }}Services"
 
-          TAG="@${{ steps.generate.outputs.folder_name }}Services"
+          Write-Host "Executing tag $TAG"
 
-          echo "Ejecutando tag $TAG"
-
-          mvn clean test \
-            "-Dkarate.options=--tags $TAG" \
-            "-Dkarate.env=${{ github.event.inputs.karate_env }}" \
-            --no-transfer-progress
+          mvn clean test "-Dkarate.options=--tags $TAG" "-Dkarate.env=${{ github.event.inputs.karate_env }}" --no-transfer-progress
 
       - name: Upload Allure Results
         if: always()
@@ -145,57 +143,60 @@ jobs:
       - name: Create Automation Branch
         if: ${{ github.event.inputs.commit_results }}
         id: branch
-        working-directory: ./project
+        shell: powershell
+        working-directory: project
         run: |
+          $branchName = "auto/karate-${{ github.run_number }}"
 
-          BRANCH_NAME="auto/karate-${{ github.run_number }}"
+          git checkout -b $branchName
 
-          git checkout -b "$BRANCH_NAME"
-
-          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
+          "branch_name=$branchName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Commit Generated Tests
         if: ${{ github.event.inputs.commit_results }}
-        working-directory: ./project
+        shell: powershell
+        working-directory: project
         run: |
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add .
 
-          if git diff --cached --quiet; then
-            echo "No hay cambios para commitear"
-            exit 0
-          fi
+          git diff --cached --quiet
+
+          if ($LASTEXITCODE -eq 0) {
+              Write-Host "No changes to commit"
+              exit 0
+          }
 
           git commit -m "feat(karate): auto-generated tests"
 
       - name: Configure Git Authentication
         if: ${{ github.event.inputs.commit_results }}
-        working-directory: ./project
+        shell: powershell
+        working-directory: project
         run: |
+          $AUTH_URL = "${{ github.event.inputs.repo_url }}".Replace(
+            "https://",
+            "https://x-access-token:${{ secrets.PAT_TOKEN }}@"
+          )
 
-          AUTH_URL=$(echo "${{ github.event.inputs.repo_url }}" \
-            | sed "s#https://#https://x-access-token:${{ secrets.PAT_TOKEN }}@#")
-
-          git remote set-url origin "$AUTH_URL"
-
-          git remote -v
+          git remote set-url origin $AUTH_URL
 
       - name: Push Branch
         if: ${{ github.event.inputs.commit_results }}
-        working-directory: ./project
+        shell: powershell
+        working-directory: project
         run: |
-          git push \
-            --set-upstream origin \
-            "${{ steps.branch.outputs.branch_name }}"
+          git push --set-upstream origin "${{ steps.branch.outputs.branch_name }}"
 
       - name: Summary
+        shell: powershell
         run: |
-          echo "========================================"
-          echo "Repositorio: ${{ github.event.inputs.repo_url }}"
-          echo "Branch origen: ${{ github.event.inputs.branch }}"
-          echo "Branch creada: auto/karate-${{ github.run_number }}"
-          echo "Ambiente: ${{ github.event.inputs.karate_env }}"
-          echo "========================================"
+          Write-Host "========================================"
+          Write-Host "Repository: ${{ github.event.inputs.repo_url }}"
+          Write-Host "Branch: ${{ github.event.inputs.branch }}"
+          Write-Host "Namespace: ${{ github.event.inputs.nameSpace }}"
+          Write-Host "Environment: ${{ github.event.inputs.karate_env }}"
+          Write-Host "Runner: Self Hosted Windows"
+          Write-Host "========================================"
