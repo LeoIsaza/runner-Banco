@@ -111,7 +111,7 @@ jobs:
         working-directory: project
         continue-on-error: true
         run: |
-          $TAG = "@${{ github.event.inputs.nameSpace }}Services"
+          $TAG = "@${{ github.event.inputs.nameSpace }}"
 
           Write-Host "Executing tag $TAG"
 
