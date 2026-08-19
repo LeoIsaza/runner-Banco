@@ -164,6 +164,9 @@ public class CurlToCustomFormat {
 
     private static String extractUrl(String curl) {
         // Soporta: curl --location 'URL' o "URL"
+        System.out.println(">>>> CURL RECEIVED <<<<");
+        System.out.println(curl);
+        System.out.println(">>>>>>>>>>>>>>>>>>>>>>>");
         Pattern p = Pattern.compile("--location\\s+(['\"])(https?://[^'\"]+)\\1", Pattern.CASE_INSENSITIVE);
         Matcher m = p.matcher(curl);
         if (m.find()) return m.group(2);
