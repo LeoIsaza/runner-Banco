@@ -1,4 +1,4 @@
-name: Karate Feature Generator & Runner
+name: Service Curl Generator & Runner
 
 run-name: Karate Generator - ${{ github.event.inputs.branch }}
 
